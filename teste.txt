@@ -1,0 +1,360 @@
+
+import json
+import os
+import time
+import requests
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
+from pypdf import PdfReader
+from scrappers.utils.preprocessing import preprocess_text, filter_text
+
+from scrappers.utils.generic_driver import GenericDriver
+from scrappers.utils.parsing import parse_cnj, parse_nome
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+TEMP_DIR = os.path.join(BASE_DIR, "temp")
+TEMP_FILE = os.path.join(TEMP_DIR, "temp_processo.pdf")
+
+
+class BotScraperJuris(GenericDriver):
+    def __init__(self, **args):
+        self.keyword = args['keyword']
+        self._init_directories()
+        super().__init__(**args)
+        self.driver.maximize_window()
+
+    def _init_directories(self):
+        """Inicialize os diretórios necessários se eles não existirem."""
+        if not os.path.exists(TEMP_DIR):
+            os.makedirs(TEMP_DIR)
+            print(f"Created temp directory at: {TEMP_DIR}")
+
+    def prepare(self):
+        pass
+
+    def scrape(self):
+        try:
+            time.sleep(3)
+            self.driver.get("https://esaj.tjsp.jus.br/cjsg/resultadoCompleta.do")
+            
+            time.sleep(4)
+
+            caixa_busca = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.NAME, "dados.buscaInteiroTeor"))
+            )
+            caixa_busca.clear()
+
+            time.sleep(3)
+            
+            caixa_busca.send_keys(self.keyword)  
+
+            time.sleep(4)
+
+            botao_de_pesquisa = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.NAME, "pbSubmit"))
+            )
+            self.driver.execute_script("arguments[0].click();", botao_de_pesquisa)
+            time.sleep(4)
+
+            all_case_data = []
+            total_cases = 0
+            MAX_CASES = 40
+            MAX_PAGES = 2
+            current_page = 1
+
+            while current_page <= MAX_PAGES and total_cases < MAX_CASES:
+                try:
+                    print(f"Processando página {current_page}")
+                    
+                    case_data = self.extract_case_data()
+                    if not case_data:
+                        print("Não há mais resultados disponíveis")
+                        break
+
+                    all_case_data.extend(case_data)
+                    total_cases += len(case_data)
+                    
+                    if total_cases >= MAX_CASES:
+                        print(f"Limite de {MAX_CASES} casos atingido")
+                        break
+
+                    if current_page < MAX_PAGES:
+                        try:
+                            if current_page == 1:
+                                next_page_xpath = '//*[@id="paginacaoSuperior-A"]/table/tbody/tr[1]/td[2]/div/a[5]'
+                            else:
+                                next_page_xpath = '//*[@id="paginacaoSuperior-A"]/table/tbody/tr[1]/td[2]/div/a[6]'
+                            
+                            next_page = WebDriverWait(self.driver, 5).until(
+                                EC.presence_of_element_located((By.XPATH, next_page_xpath))
+                            )
+                            self.driver.execute_script("arguments[0].click();", next_page)
+                            time.sleep(3)  
+                            current_page += 1
+                        except Exception as e:
+                            print(f"Erro ao navegar para próxima página: {str(e)}")
+                            break
+
+                except Exception as e:
+                    print(f"Erro ao processar página {current_page}: {str(e)}")
+                    break
+
+            if all_case_data:
+                output_path = os.path.join(TEMP_DIR, "esaj_tjsp_jus.json")
+                with open(output_path, "w", encoding="utf-8") as file:
+                    json.dump(all_case_data, file, ensure_ascii=False, indent=4)
+                print(f"Dados salvos em: {output_path}")
+            else:
+                print("Nenhum dado foi coletado para salvar")
+
+        except Exception as e:
+            print(f"Erro durante o scraping: {str(e)}")
+        finally:
+            self.driver.quit()
+
+    def transform(self):
+        pass
+
+    def download_pdf(self, cdacordao):
+        """Downloads PDF file using cdAcordao number."""
+        if not os.path.exists(TEMP_DIR):
+            os.makedirs(TEMP_DIR)
+            
+        url = f"https://esaj.tjsp.jus.br/cjsg/getArquivo.do?cdAcordao={cdacordao}&cdForo=0"
+        pdf_path = os.path.join(TEMP_DIR, f"acordao_{cdacordao}.pdf")
+        
+        try:
+            print(f"Downloading PDF {cdacordao} from: {url}")
+            response = requests.get(url)
+            if response.status_code == 200:
+                with open(pdf_path, 'wb') as f:
+                    f.write(response.content)
+                print(f"PDF saved successfully: {pdf_path}")
+                return pdf_path
+            else:
+                print(f"Failed to download PDF. Status code: {response.status_code}")
+                return None
+        except Exception as e:
+            print(f"Error downloading PDF: {str(e)}")
+            return None
+
+    def get_cdacordao(self, pdf_element):
+        """Extracts cdAcordao from PDF link."""
+        try:
+            cdacordao = pdf_element.get_attribute('cdacordao')
+            if cdacordao:
+                print(f"Found cdAcordao: {cdacordao}")
+                return cdacordao
+            return None
+        except Exception as e:
+            print(f"Error extracting cdAcordao: {str(e)}")
+            return None
+
+    def process_pdf_content(self, pdf_path):
+        """Read and process PDF content using preprocessing utilities."""
+        if not pdf_path or not os.path.exists(pdf_path):
+            print(f"PDF file not found: {pdf_path}")
+            return None
+
+        try:
+            reader = PdfReader(pdf_path)
+            text = ""
+            
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+
+            cleaned_text = filter_text(
+                text,
+                abrevs={
+                    r'art\.': 'artigo',
+                    r'proc\.': 'processo',
+                    r'ref\.': 'referente'
+                }
+            )
+
+            processed_text = preprocess_text(
+                cleaned_text,
+                text_language="portuguese",
+                rem_stopwords=False,
+                rem_small_words=2,
+                rep_dates=True,
+                rep_digits=True,
+                rem_simbols=True,
+                rem_punct=True,
+                rem_links=True,
+                rem_email=True,
+                rem_accents=True
+            )
+
+            print("\n=== Processed PDF Content ===")
+            print(f"Original length: {len(text)}")
+            print(f"Processed length: {len(processed_text)}")
+            print("\nProcessed Content:")
+            print("-------------------")
+            print(processed_text[:1000] + "..." if len(processed_text) > 1000 else processed_text)
+            print("-------------------\n")
+
+            return processed_text
+
+        except Exception as e:
+            print(f"Error processing PDF {pdf_path}: {str(e)}")
+            return None
+
+    def extract_case_data(self):
+        """Coleta os dados da página de processos."""
+        results = []
+
+        try:
+            table = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.ID, "divDadosResultado-A"))
+            )
+
+            for i in range(1, 21):
+                try:
+                    pdf_element = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located(
+                            (By.CSS_SELECTOR, f'#divDadosResultado-A table tbody tr:nth-child({i}) td:nth-child(2) table tbody tr:first-child td a[cdacordao]')
+                        )
+                    )
+                    
+                    cdacordao = self.get_cdacordao(pdf_element)
+                    pdf_path = None
+                    if cdacordao:
+                        pdf_path = self.download_pdf(cdacordao)
+                    
+                    processo_xpath = f'//*[@id="divDadosResultado-A"]/table/tbody/tr[{i}]/td[2]/table/tbody/tr[1]/td/a[1]'
+                    processo_element = table.find_element(By.XPATH, processo_xpath)
+                    numero_processo = processo_element.text
+                    area_code, tribunal_code, vara_code, ano, area, tribunal = parse_cnj(numero_processo)
+
+                    classe_assunto = table.find_element(
+                        By.XPATH, f".//tr[{i}]/td[2]/table/tbody/tr[2]/td"
+                    ).text
+                    classe_assunto = classe_assunto.replace("Classe/Assunto: ", "")
+                    classe, assunto = classe_assunto.split("/", 1) if "/" in classe_assunto else (classe_assunto, "")
+
+                    relator = table.find_element(
+                        By.XPATH, f".//tr[{i}]/td[2]/table/tbody/tr[3]/td"
+                    ).text
+                    relator = relator.replace("Relator(a): ", "")
+                    nome_relator = parse_nome(relator)
+
+                    comarca = table.find_element(
+                        By.XPATH, f".//tr[{i}]/td[2]/table/tbody/tr[4]/td"
+                    ).text
+                    comarca = comarca.replace("Comarca: ", "")
+
+                    orgao_julgador = table.find_element(
+                        By.XPATH, f".//tr[{i}]/td[2]/table/tbody/tr[5]/td"
+                    ).text
+                    orgao_julgador = orgao_julgador.replace("Órgão julgador: ", "")
+
+                    nome_parte_ativa = None
+                    nome_parte_passiva = None
+
+                    case_data = {
+                        "numero": numero_processo,
+                        "area_code": area_code,
+                        "tribunal_code": tribunal_code,
+                        "vara_code": vara_code,
+                        "ano": ano,
+                        "area": area,
+                        "tribunal": tribunal,
+                        "comarca": comarca,
+                        "valor_da_causa": None,
+                        "fontes": [{
+                            "provider": "Interno",
+                            "script": "Scrapper",
+                            "sistema": "TJ-SP",
+                            "tipo": "TRIBUNAL",
+                            "instancias": [{
+                                "url": "https://esaj.tjsp.jus.br/",
+                                "grau": None,
+                                "classe": classe,
+                                "orgao_julgador": orgao_julgador,
+                                "justica_gratuita": None,
+                                "assunto_principal": assunto,
+                                "assuntos": None,
+                                "envolvidos": [
+                                    {
+                                        "nome": nome_parte_ativa,
+                                        "tipo": "RECLAMANTE",
+                                        "polo": "ATIVO",
+                                        "id_sistema": {"login": None},
+                                        "documento": [],
+                                        "endereco": {},
+                                        "representantes": [{
+                                            "nome": None,
+                                            "tipo": "ADVOGADO",
+                                            "polo": "ATIVO",
+                                            "id_sistema": {"login": None},
+                                            "documento": [{"CPF": None}],
+                                            "endereco": {
+                                                "logradouro": None,
+                                                "numero": None,
+                                                "complemento": None,
+                                                "bairro": None,
+                                                "municipio": None,
+                                                "estado": None,
+                                                "cep": None
+                                            }
+                                        }]
+                                    },
+                                    {
+                                        "nome": nome_parte_passiva,
+                                        "tipo": "RECLAMADO",
+                                        "polo": "PASSIVO",
+                                        "id_sistema": {"login": None},
+                                        "documento": [],
+                                        "endereco": {},
+                                        "representantes": [{
+                                            "nome": None,
+                                            "tipo": "ADVOGADO",
+                                            "polo": "PASSIVO",
+                                            "id_sistema": {"login": None},
+                                            "documento": [{"CPF": None}],
+                                            "endereco": {
+                                                "logradouro": None,
+                                                "numero": None,
+                                                "complemento": None,
+                                                "bairro": None,
+                                                "municipio": None,
+                                                "estado": None,
+                                                "cep": None
+                                            }
+                                        }]
+                                    },
+                                    {
+                                        "nome": nome_relator,
+                                        "tipo": "RELATOR(A)",
+                                        "polo": "OUTROS",
+                                        "id_sistema": {"login": None},
+                                        "documento": [],
+                                        "endereco": {},
+                                        "representantes": []
+                                    }
+                                ],
+                                "movimentacoes": []
+                            }]
+                        }],
+                    }
+                    
+                    results.append(case_data)
+                    print(f"Processo {numero_processo} e PDF {cdacordao} coletados com sucesso.")
+
+                except Exception as e:
+                    print(f"Processo {i} não encontrado ou erro ao processar: {str(e)}")
+                    continue
+
+            return results
+
+        except Exception as e:
+            print(f"Erro ao coletar dados da tabela: {str(e)}")
+            return []
+
+
+
+______________________________________________________________________________________________________________
+
+
