@@ -257,6 +257,3 @@ class BotScraperJuris(GenericDriver):
         except Exception as e:
             print(f"Erro ao coletar dados da tabela: {str(e)}")
             return []
-
-
-[FEAT] Add error handling and improve text extraction logic in PDF text extractor

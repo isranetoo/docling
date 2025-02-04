@@ -1,5 +1,6 @@
 import PyPDF2
 import re
+import os
 
 def split_text_into_lines(text):
     return text.split('\n')
@@ -45,9 +46,12 @@ def extract_text_before_keywords(pdf_path):
         return f"Error processing PDF: {str(e)}", None, None, None, None
 
 if __name__ == "__main__":
-    pdf_path = input("Enter the path to your PDF file: ")
-    result, nome_parte_ativa, nome_parte_passiva, nome_apelante, nome_apelada = extract_text_before_keywords(pdf_path)
-    print("\nExtracted text:")
-    print("-" * 50)
-    print(result)
-    print("-" * 50)
+    folder_path = "scratch"
+    for filename in os.listdir(folder_path):
+        if filename.endswith(".pdf"):
+            pdf_path = os.path.join(folder_path, filename)
+            result, nome_parte_ativa, nome_parte_passiva, nome_apelante, nome_apelada = extract_text_before_keywords(pdf_path)
+            print(f"\nExtracted text from {filename}:")
+            print("-" * 50)
+            print(result)
+            print("-" * 50)
