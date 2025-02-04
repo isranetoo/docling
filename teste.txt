@@ -257,3 +257,7 @@ class BotScraperJuris(GenericDriver):
         except Exception as e:
             print(f"Erro ao coletar dados da tabela: {str(e)}")
             return []
+
+______________________________________________________________________
+
+[FEAT] Extract text from second page of PDFs and display only found keywords

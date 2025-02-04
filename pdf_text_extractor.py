@@ -11,47 +11,58 @@ def extract_text_before_keywords(pdf_path):
             pdf_reader = PyPDF2.PdfReader(file)
             
             if len(pdf_reader.pages) < 2:
-                return "Error: PDF must have at least 2 pages.", None, None, None, None
+                return "Error: PDF must have at least 2 pages.", None
             
             full_text = pdf_reader.pages[1].extract_text()
             lines = split_text_into_lines(full_text)
             
             keywords = ['VOTO', 'Ementa', 'Falência']
-            positions = [full_text.find(keyword) for keyword in keywords]
+            positions = [full_text.lower().find(keyword.lower()) for keyword in keywords]
             valid_positions = [pos for pos in positions if pos != -1]
             
             if not valid_positions:
                 print(full_text)
-                return full_text, None, None, None, None
+                return full_text, None
             
             first_keyword_pos = min(valid_positions)
             extracted_text = full_text[:first_keyword_pos].strip()
             
-            active_party = re.search(r'Parte Ativa: (.+)', extracted_text)
-            passive_party = re.search(r'Parte Passiva: (.+)', extracted_text)
+            nomes_a_procurar = ['APELANTE', 'APELANTES', 'APELADO', 'APELADOS', 'AGRAVANTE', 'AGRAVANTES', 'AGRAVADO', 'AGRAVADOS',
+                                "REQTE", "AUTOR", "AUTORA", "EMBARGTE", "IMPUGTE", "REPRTATEAT", "EMBARGDA", "RECLAMANTE", "LIQDTEAT",
+                                "IMPUGDO",  "HERDEIRO", "HERDEIRA", "INVTANTE", "RECONVINTE", "EXEQTE", "IMPTTE", "ALIMENTADO",
+                                "RECORRENTE", "EXQTE", "REQUERENTE", "REMETENTE", "DEPRECANTE", "APELANTE", "AGRAVTE",
+                                "EXEQUENTE", "EXEQÜENTE", "EMBARGANTE", "EMBTE", "AGRAVANTE", "AGRAVANT", "POLO ATIVO", "ATIVA",
+                                "INVENTARIANTE", "IMPUGNANTE", "SUSCITANTE", "CONFTE", "PROMOVENTE", "DEMANDANTE", "DEPRECAN", "OPOENTE",
+                                "CONSIGNANTE", "MPF", "MINISTÉRIO PÚBLICO", "MP", "ORDENANTE", "RECORREN", "REQUISITANTE"
+                            ]
+            resultados = {}
             
-            apelante = re.search(r'Apelante: (.+)', extracted_text)
-            apelada = re.search(r'Apelada: (.+)', extracted_text)
+            for nome in nomes_a_procurar:
+                for line in lines:
+                    match = re.search(rf'(?i){nome}: (.+)', line)
+                    if match:
+                        resultados[nome] = match.group(1)
+                        break
             
-            nome_parte_ativa = active_party.group(1) if active_party else None
-            nome_parte_passiva = passive_party.group(1) if passive_party else None
-            nome_apelante = apelante.group(1) if apelante else None
-            nome_apelada = apelada.group(1) if apelada else None
-            
-            return extracted_text, nome_parte_ativa, nome_parte_passiva, nome_apelante, nome_apelada
+            return extracted_text, resultados
 
     except FileNotFoundError:
-        return "Error: PDF file not found.", None, None, None, None
+        return "Error: PDF file not found.", None
     except Exception as e:
-        return f"Error processing PDF: {str(e)}", None, None, None, None
+        return f"Error processing PDF: {str(e)}", None
 
 if __name__ == "__main__":
     folder_path = "scratch"
     for filename in os.listdir(folder_path):
         if filename.endswith(".pdf"):
             pdf_path = os.path.join(folder_path, filename)
-            result, nome_parte_ativa, nome_parte_passiva, nome_apelante, nome_apelada = extract_text_before_keywords(pdf_path)
+            result, resultados = extract_text_before_keywords(pdf_path)
             print(f"\nExtracted text from {filename}:")
             print("-" * 50)
             print(result)
+            if resultados:
+                for nome, texto in resultados.items():
+                    if texto:
+                        print(f"{nome}: {texto}")
             print("-" * 50)
+
