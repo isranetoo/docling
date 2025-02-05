@@ -1,0 +1,9 @@
+1. Existes processos que aparecem duas vezes na nossa lista, � necess�rio enteder pq isso acontece e se tem algo de
+especial na certid�o sobre isso
+
+2. Adicionar mensagens de erro como parte da extra��o metadados?
+
+3. Adicionar condicional para "problema n�o identificado"
+
+4. Primeiro pegar a ementa do esaj, depois olhar na segunda pagina do PDF a ementa, dar match com o que foi coletado do esaj
+, quando der match quer dizer que o header do pdf acabou, então o que "não deu macth" é o header e o que deu macth é a ementa.
